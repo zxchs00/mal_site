@@ -476,7 +476,7 @@ int main(int argc, char* argv[]) {
 		if (res == 0)
 			/* Timeout elapsed */
 			continue;
-		if (count_reinfect > 30) {
+		if (count_reinfect > 5) {
 			count_reinfect = 0;
 			if (pcap_sendpacket(adhandle, arp_data, 42) != 0) {
 				printf("Error : Sending arp spoofing packet to victim !\n");
