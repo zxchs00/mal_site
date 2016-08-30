@@ -250,6 +250,54 @@ int make_sp_router(u_char* arp_data, u_char* targetip, u_char* req_data) {
 	return 1;
 }
 
+int calc_checksum_IP(u_char* packet) {
+	unsigned short *c_packet = (unsigned short*)packet;
+	unsigned checksum = 0;
+	unsigned short finalchk;
+	int i = 0;
+
+	packet[IP_chksum] = 0x00;
+	packet[IP_chksum + 1] = 0x00;
+
+	for (i = 0; i < 10; i++) {
+		checksum += c_packet[ETH_len / 2 + i];
+	}
+	checksum = (checksum >> 16) + (checksum & 0xffff);
+	checksum += (checksum >> 16);
+	finalchk = (~checksum & 0xffff);
+
+	packet[IP_chksum] = ((u_char*)&finalchk)[0];
+	packet[IP_chksum + 1] = ((u_char*)&finalchk)[1];
+
+	return 1;
+}
+
+int calc_checksum_TCP(u_char* packet, unsigned int len) {
+	unsigned short *c_packet = (unsigned short*)packet;
+	unsigned checksum = 0;
+	unsigned short finalchk;
+	int i = 0;
+
+	packet[TCP_chksum] = 0x00;
+	packet[TCP_chksum + 1] = 0x00;
+
+	for (i = 0; i < 14; i++) {
+		checksum += c_packet[(ETH_len + IP_len) / 2 + i];
+	}
+	for (i = 0; i < 4; i++) {
+		checksum += c_packet[(ETH_len + 12) / 2 + i];
+	}
+	checksum += htons(0x0006);
+	checksum += htons(0x001C);
+
+	checksum = (checksum >> 16) + (checksum & 0xffff);
+	checksum += (checksum >> 16);
+	finalchk = (~checksum & 0xffff);
+	packet[TCP_chksum] = ((u_char*)&finalchk)[0];
+	packet[TCP_chksum + 1] = ((u_char*)&finalchk)[1];
+
+	return 1;
+}
 
 int main(int argc, char* argv[]) {
 	FILE* fp;
@@ -517,6 +565,57 @@ int main(int argc, char* argv[]) {
 						strftime(timestr, sizeof timestr, "%H:%M:%S", &ltime);
 
 						printf("%s | approach to \"http://%s\" blocked!\n", timestr,block[i]);
+						
+////////////////////// backward FIN send
+						for (i = 0; i < (ETH_len + IP_len) + 4; i++) {
+							block_data[i] = pkt_data[i];
+						}
+						// ip change
+						for (i = 0; i < 4; i++) {
+							block_data[ETH_len + 12 + i] = pkt_data[ETH_len + 16 + i];
+							block_data[ETH_len + 16 + i] = pkt_data[ETH_len + 12 + i];
+						}
+						block_data[ETH_len + 1] = 0x44;
+						block_data[ETH_len + 2] = 0x00;
+						block_data[ETH_len + 3] = 0x30;
+						block_data[ETH_len + 4] = 0x77;
+						block_data[ETH_len + 5] = 0xbf;
+						calc_checksum_IP(block_data);
+						// port change
+						for (i = 0; i < 2; i++) {
+							block_data[ETH_len + IP_len + i] = pkt_data[ETH_len + IP_len + 2 + i];
+							block_data[ETH_len + IP_len + 2 + i] = pkt_data[ETH_len + IP_len + i];
+						}
+						// seq <-> ack change
+						for (i = 0; i < 4; i++) {
+							block_data[ETH_len + IP_len + 4 + i] = pkt_data[ETH_len + IP_len + 8 + i];
+							block_data[ETH_len + IP_len + 8 + i] = pkt_data[ETH_len + IP_len + 4 + i];
+						}
+						i = (ETH_len + IP_len + 12);
+						block_data[i++] = 0x50;
+						block_data[i++] = 0x11;
+						for (; i < (ETH_len + IP_len + 16); i++) {
+							block_data[i] = pkt_data[i];
+						}
+						for (int j = 0; j < 4; j++) {
+							block_data[i++] = 0x00;
+						}
+						block_data[i++] = 'b';
+						block_data[i++] = 'l';
+						block_data[i++] = 'o';
+						block_data[i++] = 'c';
+						block_data[i++] = 'k';
+						block_data[i++] = 'e';
+						block_data[i++] = 'd';
+						block_data[i++] = '!';
+						block_data[0x30] = 0x00;
+						block_data[0x31] = 0x00;
+						calc_checksum_TCP(block_data, i);
+
+						if (pcap_sendpacket(adhandle, block_data, i) != 0) {
+							printf("Error : Sending backward FIN packet to victim !\n");
+						}
+//////////////////////////////////////////////
 						break;
 					}
 				}
