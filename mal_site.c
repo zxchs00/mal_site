@@ -266,7 +266,7 @@ int main(int argc, char* argv[]) {
 	pcap_if_t *d;
 	int inum;
 	pcap_t *adhandle;
-	int res;
+	int res, chk, chkk;
 	char errbuf[PCAP_ERRBUF_SIZE];
 	struct tm ltime;
 	char timestr[16];
@@ -423,6 +423,7 @@ int main(int argc, char* argv[]) {
 		if (ntohs(*((unsigned short*)(&pkt_data[12]))) == 0x0806) {
 			count_reinfect++; // if arp packet is increased, then router and victim smell the spoofing
 							  // if arp -> check for recognizing it is arp recovery
+			/*
 			if (ntohs(*((unsigned short*)(&pkt_data[20]))) == 0x0002) { // reply
 																		// sender ip = victim ip ?
 				if ((((unsigned int*)(&pkt_data[28]))[0] == ((unsigned int*)targetip)[0])) {
@@ -447,16 +448,63 @@ int main(int argc, char* argv[]) {
 					printf(" -> Spoofing Victim again Finished\n");
 				}
 			}
+			*/
 		}
 
 		// relaying and blocking mal_site
 		else {
-			// if source mac is aa:aa:aa:aa:aa:aa
-			
+			// if destination mac is aa:aa:aa:aa:aa:aa
+			chk = 1;
+			for (i = 0; i < 6; i++) {
+				chk &= (pkt_data[i] == 'a');
+			}
+			if (chk) {
+				chkk = 1;
+				// determining who send this packet (chkk = 1 : me , chkk = 0 : router)
+				for (i = 6; i < 12; i++) {
+					chkk &= (pkt_data[i] == myMAC[i]);
+				}
+				if (chkk) { // my computer send this packet, so destination is router
+					for (i = 0; i < 6; i++) {
+						relaying_data[i] = gatewayMAC[i];
+					}
+				}
+				else {
+					for (i = 0; i < 6; i++) {
+						relaying_data[i] = myMAC[i];
+					}
+				}
+				// source mac
+				for (; i < 12; i++) {
+					relaying_data[i] = 'a';
+				}
+				// other contents are same as original packet
+				for (i = 12; i < (header->caplen); i++) {
+					relaying_data[i] = pkt_data[i];
+				}
+				
+				// checking this packet contains mal_site
+				for (i = 0; i < len; i++) {
+					if (strstr(relaying_data, block[i])) {
+						local_tv_sec = header->ts.tv_sec;
+						localtime_s(&ltime, &local_tv_sec);
+						strftime(timestr, sizeof timestr, "%H:%M:%S", &ltime);
+
+						printf("%s | approach to \"%s\" blocked!\n", timestr,block[i]);
+						break;
+					}
+				}
+
+				// if there is no mal_site, send packet to relay
+				if (i == len) {
+					if (pcap_sendpacket(adhandle, relaying_data, header->caplen) != 0) {
+						printf("Error: relaying packet\n");
+					}
+				}
+
+			}
 		}
 	}
-
-
 //	system("pause");
 	return 0;
 }
