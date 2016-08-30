@@ -188,14 +188,11 @@ int make_request(u_char* pdata, u_char* tip) {
 int make_sp_me(u_char* arp_data, u_char* targetip, u_char* req_data) {
 	int i;
 	u_char fakeMAC[6];
-	fakeMAC[0] = 0x48;
-	fakeMAC[1] = 0x45;
-	fakeMAC[2] = 0x20;
-	for (i = 0; i < 3; i++) {
-		fakeMAC[3 + i] = 'a';
+	for (i = 0; i < 6; i++) {
+		fakeMAC[i] = 'a';
 	}
 
-	// fake source mac (48:45:20:aa:aa:aa)
+	// fake source mac (aa:aa:aa:aa:aa:aa)
 	for (i = 0; i < 6; i++) {
 		arp_data[6+i] = fakeMAC[i];
 	}
@@ -227,11 +224,8 @@ int make_sp_me(u_char* arp_data, u_char* targetip, u_char* req_data) {
 int make_sp_router(u_char* arp_data, u_char* targetip, u_char* req_data) {
 	int i;
 	u_char fakeMAC[6];
-	fakeMAC[0] = 0x48;
-	fakeMAC[1] = 0x45;
-	fakeMAC[2] = 0x20;
-	for (i = 0; i < 3; i++) {
-		fakeMAC[3 + i] = 'a';
+	for (i = 0; i < 6; i++) {
+		fakeMAC[i] = 'a';
 	}
 
 	// fake source mac (aa:aa:aa:aa:aa:aa)
@@ -261,7 +255,7 @@ int make_sp_router(u_char* arp_data, u_char* targetip, u_char* req_data) {
 
 int main(int argc, char* argv[]) {
 	FILE* fp;
-	char* block[100][100];
+	u_char block[100][100] = { 0, };
 	int i,len=0;
 	const int snaplen = 65536;
 
@@ -290,16 +284,14 @@ int main(int argc, char* argv[]) {
 	u_char gatewayMAC[6]; // setting at line 379
 
 	my_MAC(myMAC);
-	fakeMAC[0] = 0x48;
-	fakeMAC[1] = 0x45;
-	fakeMAC[2] = 0x20;
-	for (i = 0; i < 3; i++) {
-		fakeMAC[3 + i] = 'a';
+	for (i = 0; i < 6; i++) {
+		fakeMAC[i] = 'a';
 	}
 
 	// reading mal_site.txt
 	fopen_s(&fp, "mal_site.txt", "r");
 	while (fgets(block[len], 100, fp)) {
+		block[len][strlen(block[len]) - 1] = 0x00;
 		len++;
 	}
 	fclose(fp);
@@ -443,13 +435,13 @@ int main(int argc, char* argv[]) {
 			if (ntohs(*((unsigned short*)(&pkt_data[20]))) == 0x0002) { // reply
 																		// sender ip = victim ip ?
 				
-				// checking reply is mine (내가 한 reply인지 확인)///
+		////////// checking reply is mine (내가 한 reply인지 확인)//////////
 				chk = 1;
 				for (i = 0; i < 6; i++) {
 					chk &= (pkt_data[6 + i] == fakeMAC[i]);
 				}
 				if (chk) continue;
-				////////////////////////////////////////////////////
+		////////////////////////////////////////////////////////////////////
 				if ((((unsigned int*)(&pkt_data[28]))[0] == ((unsigned int*)targetip)[0])) {
 					// target ip = router ?
 					// !! target is recovering router !!
@@ -491,16 +483,14 @@ int main(int argc, char* argv[]) {
 				if (chkk) { // my computer send this packet, so destination is router
 					for (i = 0; i < 6; i++) {
 						relaying_data[i] = gatewayMAC[i];
+						relaying_data[6 + i] = myMAC[i];
 					}
 				}
 				else {
 					for (i = 0; i < 6; i++) {
 						relaying_data[i] = myMAC[i];
+						relaying_data[6 + i] = gatewayMAC[i];
 					}
-				}
-				// source mac
-				for (i = 0; i < 6; i++){
-					relaying_data[6+i] = fakeMAC[i];
 				}
 				// other contents are same as original packet
 				for (i = 12; i < (header->caplen); i++) {
@@ -509,7 +499,7 @@ int main(int argc, char* argv[]) {
 				
 				// checking this packet contains mal_site
 				for (i = 0; i < len; i++) {
-					/*
+					
 					if (strstr(relaying_data, block[i])) {
 						local_tv_sec = header->ts.tv_sec;
 						localtime_s(&ltime, &local_tv_sec);
@@ -518,7 +508,6 @@ int main(int argc, char* argv[]) {
 						printf("%s | approach to \"%s\" blocked!\n", timestr,block[i]);
 						break;
 					}
-					*/
 				}
 
 				// if there is no mal_site, send packet to relay
